@@ -86,8 +86,6 @@ The application will be available at `http://localhost:8888`.
 - **Folders**: Frontend routing handles folder states via the `?folder=` query parameter.
 - **Shortening**: The `shortenUrl.js` utility handles API calls to Spoo.me with local caching to minimize API hits.
 
-For more details, see [sharing-scheme.md](./sharing-scheme.md).
-
 ## 📦 Deployment
 
 Deploy easily to **Netlify**:
