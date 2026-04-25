@@ -297,7 +297,7 @@ function App() {
           ))}
         </div>
         <h1 className="ag-page-title">
-          {breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1] : "Media Storage"}
+          {breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1] : "Media Nyeni"}
         </h1>
       </header>
 

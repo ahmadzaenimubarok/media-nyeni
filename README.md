@@ -1,8 +1,8 @@
-# 🌌 Antigravity Media Share
+# 🎨 Media Nyeni
 
 A modern, high-performance media sharing and storage platform built with **React 19**, **Vite**, and **Netlify Functions**. This application provides a seamless interface for managing files and folders stored in S3-compatible storage (like Cloudflare R2), featuring a premium dark-themed UI and integrated URL shortening.
 
-![Screenshot Placeholder](https://via.placeholder.com/1200x600/0f172a/ffffff?text=Antigravity+Media+Share+UI)
+![Screenshot Placeholder](https://via.placeholder.com/1200x600/0f172a/ffffff?text=Media+Nyeni+UI)
 
 ## ✨ Key Features
 
@@ -15,7 +15,7 @@ A modern, high-performance media sharing and storage platform built with **React
   - **URL Shortening**: Integrated with **Spoo.me** for clean, shareable links.
 - **🔍 Real-time Search**: Quickly find files and folders within the current directory.
 - **📱 Responsive Design**: Fully optimized for mobile, tablet, and desktop viewing.
-- **🎨 Premium Aesthetics**: Custom "Antigravity" design system featuring glassmorphism, smooth animations, and a curated dark-navy palette.
+- **🎨 Premium Aesthetics**: Custom "Media Nyeni" design system featuring glassmorphism, smooth animations, and a curated dark-navy palette.
 
 ## 🛠️ Tech Stack
 
@@ -23,7 +23,7 @@ A modern, high-performance media sharing and storage platform built with **React
 - **Framework**: [React 19](https://react.dev/)
 - **Bundler**: [Vite 8](https://vitejs.dev/)
 - **Icons**: [Lucide React](https://lucide.dev/)
-- **Styling**: Vanilla CSS (Antigravity Design System)
+- **Styling**: Vanilla CSS (Media Nyeni Design System)
 
 ### Backend & Storage
 - **Serverless**: [Netlify Functions](https://www.netlify.com/products/functions/)
@@ -103,4 +103,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-Built with 🌌 by [Antigravity](https://github.com/antigravity)
+Built with 🎨 by [Media Nyeni]
