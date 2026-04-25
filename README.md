@@ -2,7 +2,7 @@
 
 A modern, high-performance media sharing and storage platform built with **React 19**, **Vite**, and **Netlify Functions**. This application provides a seamless interface for managing files and folders stored in S3-compatible storage (like Cloudflare R2), featuring a premium dark-themed UI and integrated URL shortening.
 
-![Screenshot Placeholder](https://via.placeholder.com/1200x600/0f172a/ffffff?text=Media+Nyeni+UI)
+![Media Nyeni UI](./public/image.png)
 
 ## ✨ Key Features
 
