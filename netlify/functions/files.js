@@ -17,49 +17,96 @@ const client = new S3Client({
 export const handler = async (event) => {
   try {
     let folder = event.queryStringParameters?.folder || "";
+    const search = event.queryStringParameters?.q || "";
+    const isGlobal = event.queryStringParameters?.isGlobal === "true";
+
     // Ensure folder ends with / if not empty
     if (folder && !folder.endsWith("/")) folder += "/";
     
     const prefix = `uploads/${folder}`;
     
+    // For search, we might want to list recursively (no delimiter)
     const command = new ListObjectsV2Command({
       Bucket: process.env.R2_BUCKET,
-      Prefix: prefix,
-      Delimiter: "/",
+      Prefix: search && isGlobal ? "uploads/" : prefix,
+      Delimiter: search ? undefined : "/", 
     });
 
     const res = await client.send(command);
     
-    // 1. Process Folders (CommonPrefixes)
-    const folders = (res.CommonPrefixes || []).map(p => {
-        // Extract the folder name from the full prefix
-        // e.g. uploads/folder/subfolder/ -> subfolder
-        const parts = p.Prefix.split('/');
-        return parts[parts.length - 2]; 
-    });
+    let folders = [];
+    let files = [];
 
-    // 2. Process Files (Contents)
-    const files = await Promise.all(
-      (res.Contents || [])
-        .filter(file => file.Key !== prefix) // Filter out the directory itself if it's a dummy object
-        .map(async (file) => {
+    if (search) {
+      // Recursive Search Mode
+      const searchLower = search.toLowerCase();
+      
+      // Extract unique folders that match search
+      const matchedFoldersSet = new Set();
+      (res.Contents || []).forEach(obj => {
+          const keyParts = obj.Key.replace("uploads/", "").split("/");
+          keyParts.forEach((part, idx) => {
+              // If it's a directory part and matches search
+              if (idx < keyParts.length - 1 && part.toLowerCase().includes(searchLower)) {
+                  matchedFoldersSet.add(keyParts.slice(0, idx + 1).join("/") + "/");
+              }
+          });
+      });
+      folders = Array.from(matchedFoldersSet).slice(0, 20);
+
+      // Extract files that match search
+      const matchedFiles = (res.Contents || [])
+        .filter(obj => {
+          const fileName = obj.Key.split("/").pop();
+          return fileName.toLowerCase().includes(searchLower) && !obj.Key.endsWith("/");
+        })
+        .slice(0, 50);
+
+      files = await Promise.all(
+        matchedFiles.map(async (file) => {
           const getCommand = new GetObjectCommand({
             Bucket: process.env.R2_BUCKET,
             Key: file.Key,
           });
 
-          const url = await getSignedUrl(client, getCommand, {
-            expiresIn: 3600,
-          });
+          const url = await getSignedUrl(client, getCommand, { expiresIn: 3600 });
 
           return {
             key: file.Key,
             name: file.Key.split('/').pop(),
+            fullPath: file.Key.replace("uploads/", ""),
             size: file.Size,
             url,
           };
-      })
-    );
+        })
+      );
+    } else {
+      // Normal Listing Mode
+      folders = (res.CommonPrefixes || []).map(p => {
+          const parts = p.Prefix.split('/');
+          return parts[parts.length - 2]; 
+      });
+
+      files = await Promise.all(
+        (res.Contents || [])
+          .filter(file => file.Key !== prefix && !file.Key.endsWith("/"))
+          .map(async (file) => {
+            const getCommand = new GetObjectCommand({
+              Bucket: process.env.R2_BUCKET,
+              Key: file.Key,
+            });
+
+            const url = await getSignedUrl(client, getCommand, { expiresIn: 3600 });
+
+            return {
+              key: file.Key,
+              name: file.Key.split('/').pop(),
+              size: file.Size,
+              url,
+            };
+        })
+      );
+    }
 
     return {
       statusCode: 200,
@@ -67,6 +114,8 @@ export const handler = async (event) => {
         currentFolder: folder,
         folders,
         files,
+        isSearch: !!search,
+        isGlobal
       }),
     };
   } catch (err) {

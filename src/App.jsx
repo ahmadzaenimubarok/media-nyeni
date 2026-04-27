@@ -15,7 +15,8 @@ import {
   Download,
   Grid,
   List as ListIcon,
-  X
+  X,
+  Keyboard
 } from "lucide-react";
 
 import { shortenUrl } from "./utils/shortenUrl";
@@ -32,8 +33,15 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [shortening, setShortening] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(null);
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem("viewMode") || "grid"); // 'grid' or 'list'
   const fileInputRef = useRef(null);
+  const searchInputRef = useRef(null);
 
   const filteredFolders = folders.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase()));
   const filteredFiles = files.filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -53,18 +61,26 @@ function App() {
     window.history.pushState({}, "", url);
   };
 
-  const loadContents = useCallback(async (path) => {
+  const loadContents = useCallback(async (path, search = "", isGlobal = false) => {
     try {
       setLoading(true);
-      const res = await fetch(`/.netlify/functions/files?folder=${encodeURIComponent(path)}`);
+      const query = search ? `&q=${encodeURIComponent(search)}&isGlobal=${isGlobal}` : "";
+      const res = await fetch(`/.netlify/functions/files?folder=${encodeURIComponent(path)}${query}`);
       const data = await res.json();
       
       if (data.error) throw new Error(data.error);
       
       setFiles(data.files || []);
       setFolders(data.folders || []);
-      setCurrentPath(data.currentFolder || "");
-      updateURL(data.currentFolder || "");
+      
+      if (!data.isSearch) {
+        setCurrentPath(data.currentFolder || "");
+        updateURL(data.currentFolder || "");
+        setIsSearching(false);
+      } else {
+        setIsSearching(true);
+        setStatus(`Showing ${data.isGlobal ? 'global' : 'local'} search results for "${search}"`);
+      }
     } catch (err) {
       console.error("Failed to load contents:", err);
       setStatus("Error: " + err.message);
@@ -74,7 +90,8 @@ function App() {
   }, []);
 
   const navigateTo = (folderName) => {
-    const newPath = currentPath + folderName + "/";
+    // If folderName is a path (contains /), use it directly, otherwise append to currentPath
+    const newPath = folderName.includes("/") ? folderName : currentPath + folderName + "/";
     loadContents(newPath);
   };
 
@@ -184,6 +201,9 @@ function App() {
 
     try {
       setLoading(true);
+      setIsUploading(true);
+      setUploadingFile(fileToUpload);
+      setUploadProgress(0);
       setStatus("Preparing upload...");
 
       const slugifiedName = slugifyFile(fileToUpload.name);
@@ -203,24 +223,47 @@ function App() {
 
       setStatus("Uploading to storage...");
 
-      const uploadRes = await fetch(data.url, {
-        method: "PUT",
-        headers: { "Content-Type": fileToUpload.type },
-        body: fileToUpload,
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        
+        xhr.upload.addEventListener("progress", (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            setUploadProgress(percent);
+          }
+        });
+
+        xhr.addEventListener("load", () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setStatus("✅ Upload successful!");
+            setFile(null);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            loadContents(currentPath);
+            resolve();
+          } else {
+            reject(new Error("Upload failed"));
+          }
+        });
+
+        xhr.addEventListener("error", () => reject(new Error("Network error")));
+        xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
+
+        xhr.open("PUT", data.url);
+        xhr.setRequestHeader("Content-Type", fileToUpload.type);
+        xhr.send(fileToUpload);
       });
 
-      if (!uploadRes.ok) throw new Error("Upload failed");
-
-      setStatus("✅ Upload successful!");
-      setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      
-      loadContents(currentPath);
     } catch (err) {
       console.error(err);
       setStatus("❌ " + err.message);
     } finally {
       setLoading(false);
+      // Keep progress visible for a moment after success
+      setTimeout(() => {
+        setIsUploading(false);
+        setUploadingFile(null);
+        setUploadProgress(0);
+      }, 2000);
     }
   };
 
@@ -279,12 +322,35 @@ function App() {
     loadContents(folderParam);
   }, [loadContents]);
 
+  // Persist viewMode
+  useEffect(() => {
+    localStorage.setItem("viewMode", viewMode);
+  }, [viewMode]);
+
   // Keyboard Shortcuts: Arrows for navigation, Backspace for back
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
       // Don't trigger if user is typing in an input
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         return;
+      }
+
+      // Alt + N: New Folder
+      if (e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        setShowNewFolder(true);
+      }
+
+      // Alt + U: Upload File
+      if (e.altKey && e.key.toLowerCase() === 'u') {
+        e.preventDefault();
+        fileInputRef.current?.click();
+      }
+
+      // Ctrl + F: Search
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
       }
 
       // Backspace to go back to parent folder
@@ -410,8 +476,15 @@ function App() {
             className="ag-search" 
             placeholder="Search files and folders..." 
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value;
+              setSearchTerm(val);
+              if (val === "" && isSearching) {
+                loadContents(currentPath);
+              }
+            }}
             aria-label="Search files and folders"
+            ref={searchInputRef}
           />
         </div>
         <button 
@@ -430,6 +503,24 @@ function App() {
         >
           <Upload size={16} />
           Upload
+        </button>
+        {searchTerm && (
+          <button 
+            className="ag-btn ag-btn--secondary" 
+            onClick={() => loadContents(currentPath, searchTerm, true)}
+            title="Search in all folders"
+          >
+            <Search size={16} />
+            Global Search
+          </button>
+        )}
+        <button 
+          className="ag-btn ag-btn--icon" 
+          onClick={() => setShowShortcuts(true)}
+          title="Keyboard Shortcuts"
+          aria-label="View keyboard shortcuts"
+        >
+          <Keyboard size={16} />
         </button>
         <input 
           type="file" 
@@ -481,13 +572,27 @@ function App() {
           {searchTerm ? `Search Results for "${searchTerm}"` : `Directory: /${currentPath}`}
         </span>
         <div className="ag-view-toggle">
-          <button className="ag-vbtn ag-vbtn--active" aria-label="Grid view" aria-pressed="true"><Grid size={14} /></button>
-          <button className="ag-vbtn" aria-label="List view" aria-pressed="false"><ListIcon size={14} /></button>
+          <button 
+            className={`ag-vbtn ${viewMode === 'grid' ? 'ag-vbtn--active' : ''}`} 
+            onClick={() => setViewMode('grid')}
+            aria-label="Grid view" 
+            aria-pressed={viewMode === 'grid'}
+          >
+            <Grid size={14} />
+          </button>
+          <button 
+            className={`ag-vbtn ${viewMode === 'list' ? 'ag-vbtn--active' : ''}`} 
+            onClick={() => setViewMode('list')}
+            aria-label="List view" 
+            aria-pressed={viewMode === 'list'}
+          >
+            <ListIcon size={14} />
+          </button>
         </div>
       </div>
 
       {/* File/Folder Grid */}
-      <div className="ag-file-grid">
+      <div className={`ag-file-grid ${viewMode === 'list' ? 'ag-file-grid--list' : ''}`}>
         {/* Folders */}
         {filteredFolders.map((folder) => (
           <div 
@@ -513,8 +618,8 @@ function App() {
             <div className="ag-file-icon ag-file-icon--folder" aria-hidden="true">
               <Folder size={18} stroke="#7c6af7" />
             </div>
-            <div className="ag-file-name">{folder}</div>
-            <div className="ag-file-meta">Folder</div>
+            <div className="ag-file-name" title={folder}>{folder.split('/').filter(Boolean).pop()}</div>
+            <div className="ag-file-meta">{folder.includes('/') ? folder : 'Folder'}</div>
           </div>
         ))}
 
@@ -560,7 +665,7 @@ function App() {
               {getFileIcon(file.name)}
             </div>
             <div className="ag-file-name" title={file.name}>{file.name}</div>
-            <div className="ag-file-meta">{formatSize(file.size)}</div>
+            <div className="ag-file-meta">{file.fullPath ? file.fullPath : formatSize(file.size)}</div>
           </div>
         ))}
 
@@ -594,6 +699,31 @@ function App() {
         </div>
       </footer>
 
+      {/* Upload Progress Overlay */}
+      {isUploading && uploadingFile && (
+        <div className="ag-upload-overlay" role="status" aria-live="polite">
+          <div className="ag-upload-header">
+            <div className="ag-upload-title">
+              <Upload size={14} className="animate-spin" />
+              {uploadProgress === 100 ? "Processing..." : "Uploading..."}
+            </div>
+            <div className="ag-status-info" style={{ fontSize: 'var(--ag-text-xs)' }}>
+              {uploadProgress}%
+            </div>
+          </div>
+          <div className="ag-upload-filename">{uploadingFile.name}</div>
+          <div className="ag-progress-container">
+            <div 
+              className="ag-progress-bar" 
+              style={{ width: `${uploadProgress}%` }}
+            ></div>
+          </div>
+          <div className="ag-upload-stats">
+            <span>{formatSize((uploadingFile.size * uploadProgress) / 100)} of {formatSize(uploadingFile.size)}</span>
+          </div>
+        </div>
+      )}
+
       {/* Tailwind-like utility for spin if not defined */}
       <style>{`
         .animate-spin {
@@ -604,6 +734,59 @@ function App() {
           to { transform: rotate(360deg); }
         }
       `}</style>
+      {/* Shortcuts Modal */}
+      {showShortcuts && (
+        <div className='ag-modal-overlay' onClick={() => setShowShortcuts(false)}>
+          <div className='ag-modal' onClick={(e) => e.stopPropagation()} role='dialog' aria-modal='true' aria-labelledby='shortcuts-title'>
+            <div className='ag-modal-header'>
+              <h2 id='shortcuts-title' className='ag-modal-title'>Keyboard Shortcuts</h2>
+              <button className='ag-icon-btn' onClick={() => setShowShortcuts(false)} aria-label='Close'>
+                <X size={18} />
+              </button>
+            </div>
+            <div className='ag-modal-body'>
+              <div className='ag-shortcut-grid'>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Arrows</span>
+                  <span className='ag-shortcut-desc'>Navigate items</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Enter</span>
+                  <span className='ag-shortcut-desc'>Open folder/file</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Backspace</span>
+                  <span className='ag-shortcut-desc'>Back to parent folder</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Ctrl + F</span>
+                  <span className='ag-shortcut-desc'>Focus search box</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Alt + N</span>
+                  <span className='ag-shortcut-desc'>Create new folder</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Alt + U</span>
+                  <span className='ag-shortcut-desc'>Upload new file</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Ctrl + C</span>
+                  <span className='ag-shortcut-desc'>Copy shareable link</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Ctrl + S</span>
+                  <span className='ag-shortcut-desc'>Download selected file</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Delete</span>
+                  <span className='ag-shortcut-desc'>Delete selected file</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
