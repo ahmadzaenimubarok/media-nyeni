@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { 
   Folder, 
   FileText, 
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { shortenUrl } from "./utils/shortenUrl";
+import { slugifyFile } from "./utils/slugify";
 
 function App() {
   const [file, setFile] = useState(null);
@@ -34,12 +35,13 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Sync folder with URL ?folder=...
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const folderParam = params.get("folder") || "";
-    loadContents(folderParam);
-  }, []);
+  const filteredFolders = folders.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase()));
+  const filteredFiles = files.filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  
+  const allItems = useMemo(() => [
+    ...filteredFolders.map(f => ({ type: 'folder', name: f })),
+    ...filteredFiles.map(f => ({ type: 'file', ...f }))
+  ], [filteredFolders, filteredFiles]);
 
   const updateURL = (path) => {
     const url = new URL(window.location);
@@ -84,12 +86,12 @@ function App() {
     loadContents(newPath);
   };
 
-  const getShareableLink = (key) => {
+  const getShareableLink = useCallback((key) => {
     const baseUrl = window.location.origin;
     return `${baseUrl}/view/${key}`;
-  };
+  }, []);
 
-  const copyToClipboard = async (text, msg = "Link copied!") => {
+  const copyToClipboard = useCallback(async (text, msg = "Link copied!") => {
     try {
       await navigator.clipboard.writeText(text);
       setStatus("✅ " + msg);
@@ -97,10 +99,10 @@ function App() {
     } catch (err) {
       setStatus("❌ Failed to copy");
     }
-  };
+  }, []);
 
-  const handleShareFile = async (e, key) => {
-    e.stopPropagation();
+  const handleShareFile = useCallback(async (e, key) => {
+    if (e) e.stopPropagation();
     const longUrl = getShareableLink(key);
     
     setShortening(true);
@@ -109,9 +111,9 @@ function App() {
     const finalUrl = await shortenUrl(longUrl);
     await copyToClipboard(finalUrl, "File link copied!");
     setShortening(false);
-  };
+  }, [getShareableLink, copyToClipboard]);
 
-  const handleShareFolder = async (e, path = null) => {
+  const handleShareFolder = useCallback(async (e, path = null) => {
     if (e) e.stopPropagation();
     
     const folderPath = path !== null ? path : currentPath;
@@ -126,7 +128,7 @@ function App() {
     const finalUrl = await shortenUrl(longUrl);
     await copyToClipboard(finalUrl, "Folder link copied!");
     setShortening(false);
-  };
+  }, [currentPath, copyToClipboard]);
 
   const formatSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -136,8 +138,8 @@ function App() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const handleDelete = async (e, key) => {
-    e.stopPropagation();
+  const handleDelete = useCallback(async (e, key) => {
+    if (e) e.stopPropagation();
     if (!confirm("Are you sure you want to delete this item?")) return;
 
     try {
@@ -152,11 +154,11 @@ function App() {
     } catch (err) {
       setStatus("Delete failed: " + err.message);
     }
-  };
+  }, [currentPath, loadContents]);
 
-  const handleDownload = async (e, fileUrl, fileName) => {
-    e.stopPropagation();
-    e.preventDefault();
+  const handleDownload = useCallback(async (e, fileUrl, fileName) => {
+    if (e) e.stopPropagation();
+    if (e) e.preventDefault();
     try {
       setStatus("Downloading...");
       const response = await fetch(fileUrl);
@@ -174,7 +176,7 @@ function App() {
       console.error("Download failed:", err);
       setStatus("❌ Download failed");
     }
-  };
+  }, []);
 
   const handleUpload = async (selectedFile) => {
     const fileToUpload = selectedFile || file;
@@ -184,11 +186,13 @@ function App() {
       setLoading(true);
       setStatus("Preparing upload...");
 
+      const slugifiedName = slugifyFile(fileToUpload.name);
+
       const res = await fetch("/.netlify/functions/upload-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          filename: fileToUpload.name,
+          filename: slugifiedName,
           contentType: fileToUpload.type,
           folder: currentPath
         })
@@ -221,14 +225,21 @@ function App() {
   };
 
   const handleCreateFolder = () => {
-    if (!newFolderName.trim()) return;
-    const newPath = currentPath + newFolderName.trim() + "/";
+    const trimmedName = newFolderName.trim();
+    if (!trimmedName) return;
+    
+    if (trimmedName.includes(" ")) {
+      setStatus("❌ Folder name cannot contain spaces. Use dash (-) instead.");
+      return;
+    }
+
+    const newPath = currentPath + trimmedName + "/";
     setCurrentPath(newPath);
     setFiles([]);
     setFolders([]);
     setNewFolderName("");
     setShowNewFolder(false);
-    setStatus(`Navigated to new folder: ${newFolderName}`);
+    setStatus(`Navigated to new folder: ${trimmedName}`);
   };
 
   const handleDragOver = (e) => {
@@ -261,41 +272,130 @@ function App() {
     return "ag-file-icon--other";
   };
 
-  const filteredFolders = folders.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase()));
-  const filteredFiles = files.filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  // Sync folder with URL ?folder=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const folderParam = params.get("folder") || "";
+    loadContents(folderParam);
+  }, [loadContents]);
+
+  // Keyboard Shortcuts: Arrows for navigation, Backspace for back
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      // Don't trigger if user is typing in an input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      // Backspace to go back to parent folder
+      if (e.key === 'Backspace') {
+        if (currentPath) {
+          e.preventDefault();
+          const parts = currentPath.split("/").filter(Boolean);
+          const parentPath = parts.length > 1 
+            ? parts.slice(0, -1).join("/") + "/" 
+            : "";
+          loadContents(parentPath);
+        }
+      }
+
+      // Arrow Key Navigation and Item Actions
+      const grid = document.querySelector('.ag-file-grid');
+      if (grid) {
+        const cards = Array.from(grid.querySelectorAll('.ag-file-card'));
+        const currentIndex = cards.indexOf(document.activeElement);
+
+        // If an item is focused, handle item-specific shortcuts
+        if (currentIndex !== -1) {
+          const item = allItems[currentIndex];
+
+          // Ctrl + C: Copy Link (Shortened)
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+            e.preventDefault();
+            if (item.type === 'folder') handleShareFolder(null, currentPath + item.name + "/");
+            else handleShareFile(null, item.key);
+          }
+
+          // Ctrl + S: Download (Files only)
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+            e.preventDefault();
+            if (item.type === 'file') handleDownload(null, item.url, item.name);
+          }
+
+          // Delete: Delete Item (Files only)
+          if (e.key === 'Delete') {
+            e.preventDefault();
+            if (item.type === 'file') handleDelete(null, item.key);
+          }
+        }
+
+        // Arrow Navigation logic
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+          if (cards.length === 0) return;
+          
+          if (currentIndex === -1) {
+            cards[0].focus();
+            return;
+          }
+
+          e.preventDefault();
+          const gridStyle = window.getComputedStyle(grid);
+          const columns = gridStyle.getPropertyValue('grid-template-columns').split(' ').length;
+
+          let nextIndex = currentIndex;
+          switch (e.key) {
+            case 'ArrowLeft':  nextIndex = Math.max(0, currentIndex - 1); break;
+            case 'ArrowRight': nextIndex = Math.min(cards.length - 1, currentIndex + 1); break;
+            case 'ArrowUp':    nextIndex = Math.max(0, currentIndex - columns); break;
+            case 'ArrowDown':  nextIndex = Math.min(cards.length - 1, currentIndex + columns); break;
+            default: break;
+          }
+
+          if (cards[nextIndex]) cards[nextIndex].focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [currentPath, loadContents, allItems, handleShareFile, handleShareFolder, handleDownload, handleDelete]);
+
   const breadcrumbs = currentPath.split("/").filter(Boolean);
   const totalSize = files.reduce((acc, f) => acc + (f.size || 0), 0);
 
   return (
     <div className="ag-page" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      <a href="#main-content" className="ag-skip-link">Skip to content</a>
       
       {/* Header */}
       <header className="ag-header">
-        <div className="ag-breadcrumb">
+        <nav className="ag-breadcrumb" aria-label="Breadcrumb">
           <button 
             className="ag-breadcrumb-root ag-btn-link" 
             onClick={navigateToRoot}
             type="button"
+            aria-label="Go to root directory"
           >
             root
           </button>
           {breadcrumbs.map((folder, idx) => (
             <span key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span className="ag-breadcrumb-sep">/</span>
+              <span className="ag-breadcrumb-sep" aria-hidden="true">/</span>
               {idx === breadcrumbs.length - 1 ? (
-                <span className="ag-breadcrumb-current">{folder}</span>
+                <span className="ag-breadcrumb-current" aria-current="page">{folder}</span>
               ) : (
                 <button 
                   className="ag-breadcrumb-item ag-btn-link"
                   onClick={() => navigateToBreadcrumb(idx)}
                   type="button"
+                  aria-label={`Go to ${folder}`}
                 >
                   {folder}
                 </button>
               )}
             </span>
           ))}
-        </div>
+        </nav>
         <h1 className="ag-page-title">
           {breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1] : "Media Nyeni"}
         </h1>
@@ -311,13 +411,23 @@ function App() {
             placeholder="Search files and folders..." 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            aria-label="Search files and folders"
           />
         </div>
-        <button className="ag-btn" onClick={() => setShowNewFolder(!showNewFolder)}>
+        <button 
+          className="ag-btn" 
+          onClick={() => setShowNewFolder(!showNewFolder)}
+          aria-expanded={showNewFolder}
+          aria-controls="new-folder-row"
+        >
           <Plus size={16} />
           New Folder
         </button>
-        <button className="ag-btn ag-btn--primary" onClick={() => fileInputRef.current?.click()}>
+        <button 
+          className="ag-btn ag-btn--primary" 
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="Upload file"
+        >
           <Upload size={16} />
           Upload
         </button>
@@ -326,6 +436,8 @@ function App() {
           ref={fileInputRef} 
           style={{ display: 'none' }} 
           onChange={(e) => handleUpload(e.target.files[0])}
+          aria-hidden="true"
+          tabIndex="-1"
         />
       </div>
 
@@ -333,6 +445,10 @@ function App() {
       <div 
         className={`ag-dropzone ${isDragging ? 'ag-dropzone--active' : ''}`}
         onClick={() => fileInputRef.current?.click()}
+        role="button"
+        tabIndex="0"
+        onKeyDown={(e) => e.key === 'Enter' && fileInputRef.current?.click()}
+        aria-label="File upload dropzone. Click or drop files here."
       >
         <div className="ag-dropzone-icon">
           <Upload size={20} />
@@ -343,7 +459,7 @@ function App() {
 
       {/* Inline New Folder Row */}
       {showNewFolder && (
-        <div className="ag-inline-row">
+        <div className="ag-inline-row" id="new-folder-row">
           <input 
             type="text" 
             className="ag-input" 
@@ -352,6 +468,7 @@ function App() {
             onChange={(e) => setNewFolderName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
             autoFocus
+            aria-label="New folder name"
           />
           <button className="ag-btn ag-btn--primary" onClick={handleCreateFolder}>Create</button>
           <button className="ag-btn" onClick={() => setShowNewFolder(false)}>Cancel</button>
@@ -359,13 +476,13 @@ function App() {
       )}
 
       {/* Section Header */}
-      <div className="ag-section-header">
+      <div className="ag-section-header" id="main-content" tabIndex="-1">
         <span className="ag-section-title">
           {searchTerm ? `Search Results for "${searchTerm}"` : `Directory: /${currentPath}`}
         </span>
         <div className="ag-view-toggle">
-          <button className="ag-vbtn ag-vbtn--active"><Grid size={14} /></button>
-          <button className="ag-vbtn"><ListIcon size={14} /></button>
+          <button className="ag-vbtn ag-vbtn--active" aria-label="Grid view" aria-pressed="true"><Grid size={14} /></button>
+          <button className="ag-vbtn" aria-label="List view" aria-pressed="false"><ListIcon size={14} /></button>
         </div>
       </div>
 
@@ -373,18 +490,27 @@ function App() {
       <div className="ag-file-grid">
         {/* Folders */}
         {filteredFolders.map((folder) => (
-          <div key={folder} className="ag-file-card" onClick={() => navigateTo(folder)}>
+          <div 
+            key={folder} 
+            className="ag-file-card" 
+            onClick={() => navigateTo(folder)}
+            role="button"
+            tabIndex="0"
+            onKeyDown={(e) => e.key === 'Enter' && navigateTo(folder)}
+            aria-label={`Folder: ${folder}`}
+          >
             <div className="ag-card-actions">
               <button 
                 className="ag-icon-btn" 
-                title="Share"
+                title="Share folder"
                 onClick={(e) => handleShareFolder(e, currentPath + folder + "/")}
                 disabled={shortening}
+                aria-label={`Share folder ${folder}`}
               >
                 <Share2 size={14} />
               </button>
             </div>
-            <div className="ag-file-icon ag-file-icon--folder">
+            <div className="ag-file-icon ag-file-icon--folder" aria-hidden="true">
               <Folder size={18} stroke="#7c6af7" />
             </div>
             <div className="ag-file-name">{folder}</div>
@@ -398,12 +524,17 @@ function App() {
             key={file.key} 
             className="ag-file-card" 
             onClick={() => window.open(file.url, '_blank')}
+            role="button"
+            tabIndex="0"
+            onKeyDown={(e) => e.key === 'Enter' && window.open(file.url, '_blank')}
+            aria-label={`File: ${file.name}, size ${formatSize(file.size)}`}
           >
             <div className="ag-card-actions">
               <button 
                 className="ag-icon-btn" 
                 title="Download"
                 onClick={(e) => handleDownload(e, file.url, file.name)}
+                aria-label={`Download ${file.name}`}
               >
                 <Download size={14} />
               </button>
@@ -412,6 +543,7 @@ function App() {
                 title="Share"
                 onClick={(e) => handleShareFile(e, file.key)}
                 disabled={shortening}
+                aria-label={`Share ${file.name}`}
               >
                 <Share2 size={14} />
               </button>
@@ -419,11 +551,12 @@ function App() {
                 className="ag-icon-btn ag-icon-btn--danger" 
                 title="Delete"
                 onClick={(e) => handleDelete(e, file.key)}
+                aria-label={`Delete ${file.name}`}
               >
                 <Trash2 size={14} />
               </button>
             </div>
-            <div className={`ag-file-icon ${getIconClass(file.name)}`}>
+            <div className={`ag-file-icon ${getIconClass(file.name)}`} aria-hidden="true">
               {getFileIcon(file.name)}
             </div>
             <div className="ag-file-name" title={file.name}>{file.name}</div>
@@ -441,13 +574,13 @@ function App() {
 
       {/* Status Bar */}
       <footer className="ag-status-bar">
-        <div className="ag-status-info">
-          <span className={`ag-status-dot ${loading ? 'ag-status-dot--loading' : ''}`}></span>
+        <div className="ag-status-info" role="status" aria-live="polite">
+          <span className={`ag-status-dot ${loading ? 'ag-status-dot--loading' : ''}`} aria-hidden="true"></span>
           {status || `${filteredFolders.length + filteredFiles.length} items — ${formatSize(totalSize)}`}
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="ag-btn ag-btn--sm" onClick={() => loadContents(currentPath)}>
-            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+          <button className="ag-btn ag-btn--sm" onClick={() => loadContents(currentPath)} aria-label="Refresh list">
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
             Refresh
           </button>
           <button 
