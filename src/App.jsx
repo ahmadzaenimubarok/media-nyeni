@@ -449,17 +449,20 @@ function App() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
       const items = e.clipboardData?.items;
-      console.info('[media-nyeni] paste event — clipboard items:',
-        items ? [...items].map(i => i.type) : '(none)');
       if (!items) return;
 
+      // DataTransferList is NOT iterable (no Symbol.iterator) — use indexed access
       const imageFiles = [];
-      for (const item of items) {
+      const typeList = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        typeList.push(item.type);
         if (item.type.startsWith('image/')) {
           const blob = item.getAsFile();
           if (blob) imageFiles.push(blob);
         }
       }
+      console.info('[media-nyeni] paste event — clipboard types:', typeList);
       if (imageFiles.length === 0) {
         setStatus("No image in clipboard — take a screenshot first (Win+Shift+S) or copy an image");
         setTimeout(() => setStatus(""), 8000);
