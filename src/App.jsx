@@ -472,11 +472,21 @@ function App() {
       const now = new Date();
       const pad = (n) => String(n).padStart(2, '0');
       const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const makeNamedFile = (blob, name) => {
+        try {
+          return new File([blob], name, { type: blob.type });
+        } catch {
+          // Fallback: named Blob (only .name/.size/.type are consumed by the upload flow)
+          const b = new Blob([blob], { type: blob.type });
+          b.name = name;
+          return b;
+        }
+      };
       const renamed = imageFiles.map((blob, i) => {
         let ext = (blob.type.split('/')[1] || 'png').split('+')[0];
         if (ext === 'jpeg') ext = 'jpg';
         const name = `pasted-${stamp}${imageFiles.length > 1 ? `-${i + 1}` : ''}.${ext}`;
-        return new File([blob], name, { type: blob.type });
+        return makeNamedFile(blob, name);
       });
       console.info(`[media-nyeni] pasting ${imageFiles.length} image(s) to current folder`);
       handleUploads(renamed);
