@@ -16,7 +16,9 @@ import {
   Grid,
   List as ListIcon,
   X,
-  Keyboard
+  Keyboard,
+  Clipboard,
+  Copy
 } from "lucide-react";
 
 import { shortenUrl } from "./utils/shortenUrl";
@@ -41,8 +43,15 @@ function App() {
   const [uploadIndex, setUploadIndex] = useState(0);
   const [uploadTotal, setUploadTotal] = useState(0);
   const [viewMode, setViewMode] = useState(() => localStorage.getItem("viewMode") || "grid"); // 'grid' or 'list'
+  const [showClipboard, setShowClipboard] = useState(false);
+  const [clipboardItems, setClipboardItems] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("clipboardHistory")) || []; } catch { return []; }
+  });
+  const [clipDraft, setClipDraft] = useState("");
+  const [clearArmed, setClearArmed] = useState(false);
   const fileInputRef = useRef(null);
   const searchInputRef = useRef(null);
+  const clipboardInputRef = useRef(null);
   const isUploadingRef = useRef(false);
 
   const filteredFolders = folders.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -110,15 +119,68 @@ function App() {
     return `${baseUrl}/view/${key}`;
   }, []);
 
+  const saveClipboard = useCallback((text) => {
+    const t = String(text || "").trim();
+    if (!t) return;
+    setClipboardItems((prev) => {
+      const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, text: t.slice(0, 5000), ts: Date.now() };
+      const next = [item, ...prev.filter((p) => p.text !== t)].slice(0, 20);
+      try { localStorage.setItem("clipboardHistory", JSON.stringify(next)); } catch { /* ignore quota */ }
+      return next;
+    });
+  }, []);
+
+  const deleteClipItem = useCallback((id) => {
+    setClipboardItems((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      try { localStorage.setItem("clipboardHistory", JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  const clearClipboard = useCallback(() => {
+    if (!clearArmed) {
+      setClearArmed(true);
+      return;
+    }
+    setClipboardItems(() => {
+      try { localStorage.setItem("clipboardHistory", "[]"); } catch { /* ignore */ }
+      return [];
+    });
+    setClearArmed(false);
+  }, [clearArmed]);
+
+  const relTime = (ts) => {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return "now";
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h`;
+    return `${Math.floor(h / 24)}d`;
+  };
+
   const copyToClipboard = useCallback(async (text, msg = "Link copied!") => {
     try {
       await navigator.clipboard.writeText(text);
+      saveClipboard(text);
       setStatus("✅ " + msg);
       setTimeout(() => setStatus(""), 3000);
     } catch (err) {
       setStatus("❌ Failed to copy");
     }
-  }, []);
+  }, [saveClipboard]);
+
+  const copyClipItem = useCallback(async (item) => {
+    try {
+      await navigator.clipboard.writeText(item.text);
+      saveClipboard(item.text);
+      setStatus("✅ Copied back to clipboard");
+      setTimeout(() => setStatus(""), 2000);
+    } catch (err) {
+      setStatus("❌ Failed to copy");
+    }
+  }, [saveClipboard]);
 
   const handleShareFile = useCallback(async (e, key) => {
     if (e) e.stopPropagation();
@@ -343,11 +405,22 @@ function App() {
     localStorage.setItem("viewMode", viewMode);
   }, [viewMode]);
 
+  // Disarm "Clear all" after 3s, and focus clipboard input when panel opens
+  useEffect(() => {
+    if (!clearArmed) return;
+    const t = setTimeout(() => setClearArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [clearArmed]);
+
+  useEffect(() => {
+    if (showClipboard) clipboardInputRef.current?.focus();
+  }, [showClipboard]);
+
   // Keyboard Shortcuts: Arrows for navigation, Backspace for back
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
-      // Don't trigger if user is typing in an input
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+      // Escape always works; other shortcuts are ignored while typing in an input
+      if ((e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') && e.key !== 'Escape') {
         return;
       }
 
@@ -361,6 +434,22 @@ function App() {
       if (e.altKey && e.key.toLowerCase() === 'u') {
         e.preventDefault();
         fileInputRef.current?.click();
+      }
+
+      // Alt + C: Open Clipboard panel
+      if (e.altKey && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        setShowClipboard(true);
+      }
+
+      // Escape: close open dialogs
+      if (e.key === 'Escape') {
+        if (showClipboard) {
+          setShowClipboard(false);
+          setClearArmed(false);
+        } else if (showShortcuts) {
+          setShowShortcuts(false);
+        }
       }
 
       // Ctrl + F: Search
@@ -440,7 +529,7 @@ function App() {
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [currentPath, loadContents, allItems, handleShareFile, handleShareFolder, handleDownload, handleDelete]);
+  }, [currentPath, loadContents, allItems, handleShareFile, handleShareFolder, handleDownload, handleDelete, showShortcuts, showClipboard]);
 
   // Paste image upload (Ctrl+V) — only when focus is not inside a text field
   useEffect(() => {
@@ -584,6 +673,14 @@ function App() {
             Global Search
           </button>
         )}
+        <button 
+          className="ag-btn ag-btn--icon" 
+          onClick={() => setShowClipboard(true)}
+          title="Clipboard (Alt+C)"
+          aria-label="Open clipboard"
+        >
+          <Clipboard size={16} />
+        </button>
         <button 
           className="ag-btn ag-btn--icon" 
           onClick={() => setShowShortcuts(true)}
@@ -850,6 +947,14 @@ function App() {
                   <span className='ag-shortcut-desc'>Copy shareable link</span>
                 </div>
                 <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Alt + C</span>
+                  <span className='ag-shortcut-desc'>Open clipboard panel</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Esc</span>
+                  <span className='ag-shortcut-desc'>Close dialogs</span>
+                </div>
+                <div className='ag-shortcut-item'>
                   <span className='ag-shortcut-key'>Ctrl + S</span>
                   <span className='ag-shortcut-desc'>Download selected file</span>
                 </div>
@@ -858,6 +963,80 @@ function App() {
                   <span className='ag-shortcut-desc'>Delete selected file</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clipboard Panel */}
+      {showClipboard && (
+        <div className="ag-modal-overlay" onClick={() => setShowClipboard(false)}>
+          <div className="ag-modal ag-clipboard-panel" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="clipboard-title">
+            <div className="ag-modal-header">
+              <h2 id="clipboard-title" className="ag-modal-title">Clipboard</h2>
+              <div className="ag-clipboard-header-actions">
+                {clipboardItems.length > 0 && (
+                  <button
+                    className={`ag-btn ag-btn--sm ${clearArmed ? "ag-btn--primary" : ""}`}
+                    onClick={clearClipboard}
+                    aria-label="Clear all clipboard items"
+                  >
+                    <Trash2 size={12} />
+                    {clearArmed ? "Sure?" : "Clear"}
+                  </button>
+                )}
+                <button className="ag-icon-btn" onClick={() => setShowClipboard(false)} aria-label="Close clipboard panel">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+            <div className="ag-modal-body">
+              <div className="ag-clipboard-input-row">
+                <input
+                  type="text"
+                  className="ag-input"
+                  ref={clipboardInputRef}
+                  placeholder="Paste text to save (Ctrl+V)"
+                  value={clipDraft}
+                  onChange={(e) => setClipDraft(e.target.value)}
+                  onPaste={(e) => {
+                    const t = e.clipboardData?.getData("text/plain");
+                    if (t) {
+                      saveClipboard(t);
+                      setClipDraft("");
+                      setStatus("✅ Saved to clipboard");
+                      setTimeout(() => setStatus(""), 2000);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && clipDraft.trim()) {
+                      saveClipboard(clipDraft);
+                      setClipDraft("");
+                      setStatus("✅ Saved to clipboard");
+                      setTimeout(() => setStatus(""), 2000);
+                    }
+                  }}
+                  aria-label="Text to save in clipboard"
+                />
+              </div>
+              {clipboardItems.length === 0 ? (
+                <div className="ag-clipboard-empty">Nothing saved yet — share a link or paste text above.</div>
+              ) : (
+                <div className="ag-clipboard-list">
+                  {clipboardItems.map((item) => (
+                    <div key={item.id} className="ag-clipboard-item" title={item.text}>
+                      <span className="ag-clipboard-text">{item.text}</span>
+                      <span className="ag-clipboard-time" aria-label="Saved">{relTime(item.ts)}</span>
+                      <button className="ag-icon-btn ag-icon-btn--sm" onClick={() => copyClipItem(item)} title="Copy back" aria-label="Copy back to clipboard">
+                        <Copy size={13} />
+                      </button>
+                      <button className="ag-icon-btn ag-icon-btn--sm ag-icon-btn--danger" onClick={() => deleteClipItem(item.id)} title="Remove" aria-label="Remove item">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
