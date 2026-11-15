@@ -449,6 +449,8 @@ function App() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
       const items = e.clipboardData?.items;
+      console.info('[media-nyeni] paste event — clipboard items:',
+        items ? [...items].map(i => i.type) : '(none)');
       if (!items) return;
 
       const imageFiles = [];
@@ -460,7 +462,7 @@ function App() {
       }
       if (imageFiles.length === 0) {
         setStatus("No image in clipboard — take a screenshot first (Win+Shift+S) or copy an image");
-        setTimeout(() => setStatus(""), 4000);
+        setTimeout(() => setStatus(""), 8000);
         return;
       }
 
@@ -473,6 +475,7 @@ function App() {
         const name = `pasted-${stamp}${imageFiles.length > 1 ? `-${i + 1}` : ''}.${ext}`;
         return new File([blob], name, { type: blob.type });
       });
+      console.info(`[media-nyeni] pasting ${imageFiles.length} image(s) to current folder`);
       handleUploads(renamed);
     };
 
