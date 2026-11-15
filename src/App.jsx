@@ -23,7 +23,6 @@ import { shortenUrl } from "./utils/shortenUrl";
 import { slugifyFile } from "./utils/slugify";
 
 function App() {
-  const [file, setFile] = useState(null);
   const [status, setStatus] = useState("");
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -39,9 +38,12 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(null);
+  const [uploadIndex, setUploadIndex] = useState(0);
+  const [uploadTotal, setUploadTotal] = useState(0);
   const [viewMode, setViewMode] = useState(() => localStorage.getItem("viewMode") || "grid"); // 'grid' or 'list'
   const fileInputRef = useRef(null);
   const searchInputRef = useRef(null);
+  const isUploadingRef = useRef(false);
 
   const filteredFolders = folders.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase()));
   const filteredFiles = files.filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -195,77 +197,93 @@ function App() {
     }
   }, []);
 
-  const handleUpload = async (selectedFile) => {
-    const fileToUpload = selectedFile || file;
-    if (!fileToUpload) return;
+  const uploadOneFile = useCallback(async (fileToUpload) => {
+    const slugifiedName = slugifyFile(fileToUpload.name);
 
-    try {
-      setLoading(true);
-      setIsUploading(true);
-      setUploadingFile(fileToUpload);
-      setUploadProgress(0);
-      setStatus("Preparing upload...");
+    const res = await fetch("/.netlify/functions/upload-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: slugifiedName,
+        contentType: fileToUpload.type,
+        folder: currentPath
+      })
+    });
 
-      const slugifiedName = slugifyFile(fileToUpload.name);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
 
-      const res = await fetch("/.netlify/functions/upload-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: slugifiedName,
-          contentType: fileToUpload.type,
-          folder: currentPath
-        })
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          setUploadProgress(percent);
+        }
       });
 
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-
-      setStatus("Uploading to storage...");
-
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        
-        xhr.upload.addEventListener("progress", (event) => {
-          if (event.lengthComputable) {
-            const percent = Math.round((event.loaded / event.total) * 100);
-            setUploadProgress(percent);
-          }
-        });
-
-        xhr.addEventListener("load", () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setStatus("✅ Upload successful!");
-            setFile(null);
-            if (fileInputRef.current) fileInputRef.current.value = '';
-            loadContents(currentPath);
-            resolve();
-          } else {
-            reject(new Error("Upload failed"));
-          }
-        });
-
-        xhr.addEventListener("error", () => reject(new Error("Network error")));
-        xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
-
-        xhr.open("PUT", data.url);
-        xhr.setRequestHeader("Content-Type", fileToUpload.type);
-        xhr.send(fileToUpload);
+      xhr.addEventListener("load", () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`Upload failed (${xhr.status})`));
       });
 
-    } catch (err) {
-      console.error(err);
-      setStatus("❌ " + err.message);
-    } finally {
-      setLoading(false);
-      // Keep progress visible for a moment after success
-      setTimeout(() => {
-        setIsUploading(false);
-        setUploadingFile(null);
-        setUploadProgress(0);
-      }, 2000);
+      xhr.addEventListener("error", () => reject(new Error("Network error")));
+      xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
+
+      xhr.open("PUT", data.url);
+      xhr.setRequestHeader("Content-Type", fileToUpload.type);
+      xhr.send(fileToUpload);
+    });
+  }, [currentPath]);
+
+  const handleUploads = useCallback(async (list) => {
+    const fileList = Array.from(list || []);
+    if (fileList.length === 0) return;
+    if (isUploadingRef.current) {
+      setStatus("⏳ Please wait — previous upload is still running");
+      return;
     }
-  };
+
+    isUploadingRef.current = true;
+    setLoading(true);
+    setIsUploading(true);
+    setUploadTotal(fileList.length);
+    let succeeded = 0;
+    let failed = 0;
+
+    for (let i = 0; i < fileList.length; i++) {
+      const fileToUpload = fileList[i];
+      setUploadingFile(fileToUpload);
+      setUploadIndex(i + 1);
+      setUploadProgress(0);
+      setStatus(fileList.length > 1 ? `Preparing ${i + 1}/${fileList.length}...` : "Preparing upload...");
+      try {
+        await uploadOneFile(fileToUpload);
+        succeeded++;
+      } catch (err) {
+        failed++;
+        console.error(`Upload failed for ${fileToUpload.name}:`, err);
+      }
+    }
+
+    setLoading(false);
+    setStatus(
+      failed === 0
+        ? `✅ ${succeeded} file${succeeded === 1 ? "" : "s"} uploaded`
+        : `${succeeded} uploaded, ${failed} failed`
+    );
+    loadContents(currentPath);
+
+    setTimeout(() => {
+      isUploadingRef.current = false;
+      setIsUploading(false);
+      setUploadingFile(null);
+      setUploadProgress(0);
+      setUploadIndex(0);
+      setUploadTotal(0);
+    }, 2000);
+  }, [currentPath, loadContents, uploadOneFile]);
 
   const handleCreateFolder = () => {
     const trimmedName = newFolderName.trim();
@@ -297,10 +315,8 @@ function App() {
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile) {
-      handleUpload(droppedFile);
-    }
+    const droppedFiles = Array.from(e.dataTransfer.files || []);
+    if (droppedFiles.length > 0) handleUploads(droppedFiles);
   };
 
   const getFileIcon = (filename) => {
@@ -426,6 +442,40 @@ function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [currentPath, loadContents, allItems, handleShareFile, handleShareFolder, handleDownload, handleDelete]);
 
+  // Paste image upload (Ctrl+V) — only when focus is not inside a text field
+  useEffect(() => {
+    const onPaste = (e) => {
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const imageFiles = [];
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          if (blob) imageFiles.push(blob);
+        }
+      }
+      if (imageFiles.length === 0) return;
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const renamed = imageFiles.map((blob, i) => {
+        let ext = (blob.type.split('/')[1] || 'png').split('+')[0];
+        if (ext === 'jpeg') ext = 'jpg';
+        const name = `pasted-${stamp}${imageFiles.length > 1 ? `-${i + 1}` : ''}.${ext}`;
+        return new File([blob], name, { type: blob.type });
+      });
+      handleUploads(renamed);
+    };
+
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [handleUploads]);
+
   const breadcrumbs = currentPath.split("/").filter(Boolean);
   const totalSize = files.reduce((acc, f) => acc + (f.size || 0), 0);
 
@@ -526,7 +576,8 @@ function App() {
           type="file" 
           ref={fileInputRef} 
           style={{ display: 'none' }} 
-          onChange={(e) => handleUpload(e.target.files[0])}
+          multiple
+          onChange={(e) => { handleUploads(e.target.files); e.target.value = ''; }}
           aria-hidden="true"
           tabIndex="-1"
         />
@@ -545,7 +596,7 @@ function App() {
           <Upload size={20} />
         </div>
         <div className="ag-dropzone-label">Drop files here to upload</div>
-        <div className="ag-dropzone-sub">or click to browse — max 100MB per file</div>
+        <div className="ag-dropzone-sub">or click to browse — multiple files, or paste images (Ctrl+V) · max 100MB each</div>
       </div>
 
       {/* Inline New Folder Row */}
@@ -705,7 +756,7 @@ function App() {
           <div className="ag-upload-header">
             <div className="ag-upload-title">
               <Upload size={14} className="animate-spin" />
-              {uploadProgress === 100 ? "Processing..." : "Uploading..."}
+              {uploadTotal > 1 ? `Uploading ${uploadIndex}/${uploadTotal}...` : uploadProgress === 100 ? "Processing..." : "Uploading..."}
             </div>
             <div className="ag-status-info" style={{ fontSize: 'var(--ag-text-xs)' }}>
               {uploadProgress}%
@@ -768,7 +819,11 @@ function App() {
                 </div>
                 <div className='ag-shortcut-item'>
                   <span className='ag-shortcut-key'>Alt + U</span>
-                  <span className='ag-shortcut-desc'>Upload new file</span>
+                  <span className='ag-shortcut-desc'>Upload file(s)</span>
+                </div>
+                <div className='ag-shortcut-item'>
+                  <span className='ag-shortcut-key'>Ctrl + V</span>
+                  <span className='ag-shortcut-desc'>Paste image to upload</span>
                 </div>
                 <div className='ag-shortcut-item'>
                   <span className='ag-shortcut-key'>Ctrl + C</span>
