@@ -458,7 +458,11 @@ function App() {
           if (blob) imageFiles.push(blob);
         }
       }
-      if (imageFiles.length === 0) return;
+      if (imageFiles.length === 0) {
+        setStatus("No image in clipboard — take a screenshot first (Win+Shift+S) or copy an image");
+        setTimeout(() => setStatus(""), 4000);
+        return;
+      }
 
       const now = new Date();
       const pad = (n) => String(n).padStart(2, '0');
